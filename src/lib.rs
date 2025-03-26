@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod drawing;
 pub mod focus;
 pub mod input_handler;
+pub mod protocols;
 pub mod render;
 pub mod shell;
 pub mod state;
@@ -21,4 +22,4 @@ pub mod winit;
 #[cfg(feature = "x11")]
 pub mod x11;
 
-pub use state::{LuxoState, ClientState};
+pub use state::{ClientState, LuxoState};
