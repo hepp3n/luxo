@@ -42,7 +42,7 @@ if command -v systemctl >/dev/null; then
     systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP 
 fi
 if [[ -z "${DBUS_SESSION_BUS_ADDRESS}" ]]; then
-    exec /usr/bin/dbus-run-session -- /home/hepp3n/luxo/target/release/luxo
+    exec /usr/bin/dbus-run-session -- /home/hepp3n/luxo/target/release/luxo --tty-udev
 else
-    exec /home/hepp3n/luxo/target/release/luxo
+    exec /home/hepp3n/luxo/target/release/luxo --tty-udev
 fi
