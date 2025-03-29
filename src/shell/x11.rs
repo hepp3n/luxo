@@ -1,6 +1,7 @@
 use std::{cell::RefCell, os::unix::io::OwnedFd};
 
 use smithay::{
+    delegate_xwayland_keyboard_grab, delegate_xwayland_shell,
     desktop::{space::SpaceElement, Window},
     input::pointer::Focus,
     utils::{Logical, Rectangle, SERIAL_COUNTER},
@@ -17,6 +18,7 @@ use smithay::{
             },
             SelectionTarget,
         },
+        xwayland_keyboard_grab::XWaylandKeyboardGrabHandler,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
@@ -26,11 +28,15 @@ use smithay::{
 };
 use tracing::{error, trace};
 
-use crate::{focus::KeyboardFocusTarget, state::Backend, LuxoState};
+use crate::{focus::KeyboardFocusTarget, shell::FullscreenSurface, state::Luxo};
 
 use super::{
-    place_new_window, FullscreenSurface, PointerMoveSurfaceGrab, PointerResizeSurfaceGrab, ResizeData,
-    ResizeState, SurfaceData, TouchMoveSurfaceGrab, WindowElement,
+    element::{place_new_window, WindowElement},
+    grabs::{
+        PointerMoveSurfaceGrab, PointerResizeSurfaceGrab, ResizeData, ResizeState,
+        TouchMoveSurfaceGrab,
+    },
+    SurfaceData,
 };
 
 #[derive(Debug, Default)]
@@ -45,13 +51,15 @@ impl OldGeometry {
     }
 }
 
-impl<BackendData: Backend> XWaylandShellHandler for LuxoState<BackendData> {
+impl XWaylandShellHandler for Luxo {
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {
         &mut self.xwayland_shell_state
     }
 }
 
-impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
+delegate_xwayland_shell!(Luxo);
+
+impl XwmHandler for Luxo {
     fn xwm_state(&mut self, _xwm: XwmId) -> &mut X11Wm {
         self.xwm.as_mut().unwrap()
     }
@@ -62,7 +70,12 @@ impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         window.set_mapped(true).unwrap();
         let window = WindowElement(Window::new_x11_window(window));
-        place_new_window(&mut self.space, self.pointer.current_location(), &window, true);
+        place_new_window(
+            &mut self.space,
+            self.pointer.current_location(),
+            &window,
+            true,
+        );
         let bbox = self.space.element_bbox(&window).unwrap();
         let Some(xsurface) = window.0.x11_surface() else {
             unreachable!()
@@ -177,7 +190,9 @@ impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
             window.set_fullscreen(true).unwrap();
             elem.set_ssd(false);
             window.configure(geometry).unwrap();
-            output.user_data().insert_if_missing(FullscreenSurface::default);
+            output
+                .user_data()
+                .insert_if_missing(FullscreenSurface::default);
             output
                 .user_data()
                 .get::<FullscreenSurface>()
@@ -203,14 +218,24 @@ impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
                     .unwrap_or(false)
             }) {
                 trace!("Unfullscreening: {:?}", elem);
-                output.user_data().get::<FullscreenSurface>().unwrap().clear();
+                output
+                    .user_data()
+                    .get::<FullscreenSurface>()
+                    .unwrap()
+                    .clear();
                 window.configure(self.space.element_bbox(elem)).unwrap();
-                self.backend_data.reset_buffers(output);
+                self.udev_data.reset_buffers(output);
             }
         }
     }
 
-    fn resize_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32, edges: X11ResizeEdge) {
+    fn resize_request(
+        &mut self,
+        _xwm: XwmId,
+        window: X11Surface,
+        _button: u32,
+        edges: X11ResizeEdge,
+    ) {
         // luckily anvil only supports one seat anyway...
         let start_data = self.pointer.grab_start_data().unwrap();
 
@@ -270,11 +295,20 @@ impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
         false
     }
 
-    fn send_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_type: String, fd: OwnedFd) {
+    fn send_selection(
+        &mut self,
+        _xwm: XwmId,
+        selection: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+    ) {
         match selection {
             SelectionTarget::Clipboard => {
                 if let Err(err) = request_data_device_client_selection(&self.seat, mime_type, fd) {
-                    error!(?err, "Failed to request current wayland clipboard for Xwayland",);
+                    error!(
+                        ?err,
+                        "Failed to request current wayland clipboard for Xwayland",
+                    );
                 }
             }
             SelectionTarget::Primary => {
@@ -292,11 +326,14 @@ impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
         trace!(?selection, ?mime_types, "Got Selection from X11",);
         // TODO check, that focused windows is X11 window before doing this
         match selection {
-            SelectionTarget::Clipboard => {
-                set_data_device_selection(&self.display_handle, &self.seat, mime_types, ())
-            }
+            SelectionTarget::Clipboard => set_data_device_selection(
+                &self.udev_data.display_handle,
+                &self.seat,
+                mime_types,
+                (),
+            ),
             SelectionTarget::Primary => {
-                set_primary_selection(&self.display_handle, &self.seat, mime_types, ())
+                set_primary_selection(&self.udev_data.display_handle, &self.seat, mime_types, ())
             }
         }
     }
@@ -305,19 +342,34 @@ impl<BackendData: Backend> XwmHandler for LuxoState<BackendData> {
         match selection {
             SelectionTarget::Clipboard => {
                 if current_data_device_selection_userdata(&self.seat).is_some() {
-                    clear_data_device_selection(&self.display_handle, &self.seat)
+                    clear_data_device_selection(&self.udev_data.display_handle, &self.seat)
                 }
             }
             SelectionTarget::Primary => {
                 if current_primary_selection_userdata(&self.seat).is_some() {
-                    clear_primary_selection(&self.display_handle, &self.seat)
+                    clear_primary_selection(&self.udev_data.display_handle, &self.seat)
                 }
             }
         }
     }
 }
 
-impl<BackendData: Backend> LuxoState<BackendData> {
+impl XWaylandKeyboardGrabHandler for Luxo {
+    fn keyboard_focus_for_xsurface(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> Option<Self::KeyboardFocus> {
+        let elem = self
+            .space
+            .elements()
+            .find(|elem| elem.wl_surface().as_deref() == Some(surface))?;
+        Some(KeyboardFocusTarget::Window(elem.0.clone()))
+    }
+}
+
+delegate_xwayland_keyboard_grab!(Luxo);
+
+impl Luxo {
     pub fn maximize_request_x11(&mut self, window: &X11Surface) {
         let Some(elem) = self
             .space
@@ -341,7 +393,11 @@ impl<BackendData: Backend> LuxoState<BackendData> {
         window.set_maximized(true).unwrap();
         window.configure(geometry).unwrap();
         window.user_data().insert_if_missing(OldGeometry::default);
-        window.user_data().get::<OldGeometry>().unwrap().save(old_geo);
+        window
+            .user_data()
+            .get::<OldGeometry>()
+            .unwrap()
+            .save(old_geo);
         self.space.map_element(elem, geometry.loc, false);
     }
 

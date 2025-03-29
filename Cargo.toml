@@ -3,62 +3,19 @@ authors = ["hepp3n"]
 edition = "2021"
 license = "MIT"
 name = "luxo"
-publish = false
 version = "0.0.1"
 
 [dependencies]
+anyhow = "1.0.97"
 bitflags = "2.9.0"
-fps_ticker = {version = "1.0.0", optional = true}
-image = {version = "0.25.6", default-features = false, optional = true, features = ["png"]}
-rand = "0.9.0"
+image = {version = "0.25.6", default-features = false, features = ["png"]}
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 thiserror = "2"
-xcursor = {version = "0.3.8", optional = true}
+xcursor = {version = "0.3.8"}
 xkbcommon = "0.8.0"
-renderdoc = {version = "0.12.1", optional = true}
-smithay-drm-extras = {git = "https://github.com/Smithay/smithay", optional = true}
-puffin_http = { version = "0.16.1", optional = true }
-profiling = { version = "1.0" }
+smithay-drm-extras = { git = "https://github.com/Smithay/smithay" }
+drm = "0.14.1"
 
 [dependencies.smithay]
-default-features = false
-features = ["desktop", "wayland_frontend"]
 git = "https://github.com/Smithay/smithay"
-
-[dependencies.x11rb]
-default-features = false
-features = ["composite"]
-optional = true
-version = "0.13.1"
-
-[build-dependencies]
-gl_generator = "0.14"
-
-[features]
-debug = ["fps_ticker", "image/png", "renderdoc"]
-default = ["egl", "winit", "x11", "udev", "xwayland"]
-egl = ["smithay/use_system_lib", "smithay/backend_egl"]
-test_all_features = ["default", "debug"]
-udev = [
-  "smithay-drm-extras",
-  "smithay/backend_libinput",
-  "smithay/backend_udev",
-  "smithay/backend_drm",
-  "smithay/backend_gbm",
-  "smithay/backend_vulkan",
-  "smithay/backend_egl",
-  "smithay/backend_session_libseat",
-  "image",
-  "smithay/renderer_gl",
-  "smithay/renderer_pixman",
-  "smithay/renderer_multi",
-  "xcursor",
-]
-winit = ["smithay/backend_winit", "smithay/backend_drm"]
-x11 = ["smithay/backend_x11", "x11rb", "smithay/renderer_gl", "smithay/backend_vulkan"]
-xwayland = ["smithay/xwayland", "x11rb", "smithay/x11rb_event_source", "xcursor"]
-profile-with-puffin = ["profiling/profile-with-puffin", "puffin_http"]
-profile-with-tracy = ["profiling/profile-with-tracy"]
-profile-with-tracy-mem = ["profile-with-tracy"]
-renderer_sync = []

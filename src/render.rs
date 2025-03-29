@@ -1,28 +1,35 @@
+use std::{collections::HashMap, time::Duration};
+
 use smithay::{
     backend::renderer::{
-        damage::{Error as OutputDamageTrackerError, OutputDamageTracker, RenderOutputResult},
         element::{
             surface::WaylandSurfaceRenderElement,
             utils::{
-                ConstrainAlign, ConstrainScaleBehavior, CropRenderElement, RelocateRenderElement,
+                select_dmabuf_feedback, CropRenderElement, RelocateRenderElement,
                 RescaleRenderElement,
             },
-            AsRenderElements, RenderElement, Wrap,
+            RenderElement, RenderElementStates, Wrap,
         },
-        Color32F, ImportAll, ImportMem, Renderer,
+        ImportAll, ImportMem, Renderer,
     },
-    desktop::space::{
-        constrain_space_element, ConstrainBehavior, ConstrainReference, Space, SpaceRenderElements,
+    desktop::{
+        space::SpaceRenderElements,
+        utils::{surface_primary_scanout_output, with_surfaces_surface_tree},
     },
+    input::pointer::CursorImageStatus,
     output::Output,
-    utils::{Point, Rectangle, Size},
+    reexports::wayland_server::{backend::ClientId, Client, Resource as _},
+    utils::{Monotonic, Time},
+    wayland::{
+        commit_timing::CommitTimerBarrierStateUserData, compositor::CompositorHandler as _,
+        fifo::FifoBarrierCachedState, fractional_scale::with_fractional_scale,
+    },
 };
 
-#[cfg(feature = "debug")]
-use crate::drawing::FpsElement;
 use crate::{
-    drawing::{PointerRenderElement, CLEAR_COLOR, CLEAR_COLOR_FULLSCREEN},
-    shell::{FullscreenSurface, WindowElement, WindowRenderElement},
+    drawing::PointerRenderElement,
+    shell::element::WindowRenderElement,
+    state::{Luxo, SurfaceDmabufFeedback},
 };
 
 smithay::backend::renderer::element::render_elements! {
@@ -30,12 +37,6 @@ smithay::backend::renderer::element::render_elements! {
         R: ImportAll + ImportMem;
     Pointer=PointerRenderElement<R>,
     Surface=WaylandSurfaceRenderElement<R>,
-    #[cfg(feature = "debug")]
-    // Note: We would like to borrow this element instead, but that would introduce
-    // a feature-dependent lifetime, which introduces a lot more feature bounds
-    // as the whole type changes and we can't have an unused lifetime (for when "debug" is disabled)
-    // in the declaration.
-    Fps=FpsElement<R::TextureId>,
 }
 
 impl<R: Renderer> std::fmt::Debug for CustomRenderElements<R> {
@@ -43,8 +44,6 @@ impl<R: Renderer> std::fmt::Debug for CustomRenderElements<R> {
         match self {
             Self::Pointer(arg0) => f.debug_tuple("Pointer").field(arg0).finish(),
             Self::Surface(arg0) => f.debug_tuple("Surface").field(arg0).finish(),
-            #[cfg(feature = "debug")]
-            Self::Fps(arg0) => f.debug_tuple("Fps").field(arg0).finish(),
             Self::_GenericCatcher(arg0) => f.debug_tuple("_GenericCatcher").field(arg0).finish(),
         }
     }
@@ -72,139 +71,215 @@ impl<R: Renderer + ImportAll + ImportMem, E: RenderElement<R> + std::fmt::Debug>
     }
 }
 
-pub fn space_preview_elements<'a, R, C>(
-    renderer: &'a mut R,
-    space: &'a Space<WindowElement>,
-    output: &'a Output,
-) -> impl Iterator<Item = C> + 'a
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Clone + 'static,
-    C: From<CropRenderElement<RelocateRenderElement<RescaleRenderElement<WindowRenderElement<R>>>>> + 'a,
-{
-    let constrain_behavior = ConstrainBehavior {
-        reference: ConstrainReference::BoundingBox,
-        behavior: ConstrainScaleBehavior::Fit,
-        align: ConstrainAlign::CENTER,
-    };
+impl Luxo {
+    pub fn pre_repaint(&mut self, output: &Output, frame_target: impl Into<Time<Monotonic>>) {
+        let frame_target = frame_target.into();
 
-    let preview_padding = 10;
+        #[allow(clippy::mutable_key_type)]
+        let mut clients: HashMap<ClientId, Client> = HashMap::new();
+        self.space.elements().for_each(|window| {
+            window.with_surfaces(|surface, states| {
+                if let Some(mut commit_timer_state) = states
+                    .data_map
+                    .get::<CommitTimerBarrierStateUserData>()
+                    .map(|commit_timer| commit_timer.lock().unwrap())
+                {
+                    commit_timer_state.signal_until(frame_target);
+                    let client = surface.client().unwrap();
+                    clients.insert(client.id(), client);
+                }
+            });
+        });
 
-    let elements_on_space = space.elements_for_output(output).count();
-    let output_scale = output.current_scale().fractional_scale();
-    let output_transform = output.current_transform();
-    let output_size = output
-        .current_mode()
-        .map(|mode| {
-            output_transform
-                .transform_size(mode.size)
-                .to_f64()
-                .to_logical(output_scale)
-        })
-        .unwrap_or_default();
+        let map = smithay::desktop::layer_map_for_output(output);
+        for layer_surface in map.layers() {
+            layer_surface.with_surfaces(|surface, states| {
+                if let Some(mut commit_timer_state) = states
+                    .data_map
+                    .get::<CommitTimerBarrierStateUserData>()
+                    .map(|commit_timer| commit_timer.lock().unwrap())
+                {
+                    commit_timer_state.signal_until(frame_target);
+                    let client = surface.client().unwrap();
+                    clients.insert(client.id(), client);
+                }
+            });
+        }
+        // Drop the lock to the layer map before calling blocker_cleared, which might end up
+        // calling the commit handler which in turn again could access the layer map.
+        std::mem::drop(map);
 
-    let max_elements_per_row = 4;
-    let elements_per_row = usize::min(elements_on_space, max_elements_per_row);
-    let rows = f64::ceil(elements_on_space as f64 / elements_per_row as f64);
-
-    let preview_size = Size::from((
-        f64::round(output_size.w / elements_per_row as f64) as i32 - preview_padding * 2,
-        f64::round(output_size.h / rows) as i32 - preview_padding * 2,
-    ));
-
-    space
-        .elements_for_output(output)
-        .enumerate()
-        .flat_map(move |(element_index, window)| {
-            let column = element_index % elements_per_row;
-            let row = element_index / elements_per_row;
-            let preview_location = Point::from((
-                preview_padding + (preview_padding + preview_size.w) * column as i32,
-                preview_padding + (preview_padding + preview_size.h) * row as i32,
-            ));
-            let constrain = Rectangle::new(preview_location, preview_size);
-            constrain_space_element(
-                renderer,
-                window,
-                preview_location,
-                1.0,
-                output_scale,
-                constrain,
-                constrain_behavior,
-            )
-        })
-}
-
-#[profiling::function]
-pub fn output_elements<R>(
-    output: &Output,
-    space: &Space<WindowElement>,
-    custom_elements: impl IntoIterator<Item = CustomRenderElements<R>>,
-    renderer: &mut R,
-    show_window_preview: bool,
-) -> (Vec<OutputRenderElements<R, WindowRenderElement<R>>>, Color32F)
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Clone + 'static,
-{
-    if let Some(window) = output
-        .user_data()
-        .get::<FullscreenSurface>()
-        .and_then(|f| f.get())
-    {
-        let scale = output.current_scale().fractional_scale().into();
-        let window_render_elements: Vec<WindowRenderElement<R>> =
-            AsRenderElements::<R>::render_elements(&window, renderer, (0, 0).into(), scale, 1.0);
-
-        let elements = custom_elements
-            .into_iter()
-            .map(OutputRenderElements::from)
-            .chain(
-                window_render_elements
-                    .into_iter()
-                    .map(|e| OutputRenderElements::Window(Wrap::from(e))),
-            )
-            .collect::<Vec<_>>();
-        (elements, CLEAR_COLOR_FULLSCREEN)
-    } else {
-        let mut output_render_elements = custom_elements
-            .into_iter()
-            .map(OutputRenderElements::from)
-            .collect::<Vec<_>>();
-
-        if show_window_preview && space.elements_for_output(output).count() > 0 {
-            output_render_elements.extend(space_preview_elements(renderer, space, output));
+        if let CursorImageStatus::Surface(ref surface) = self.cursor_status {
+            with_surfaces_surface_tree(surface, |surface, states| {
+                if let Some(mut commit_timer_state) = states
+                    .data_map
+                    .get::<CommitTimerBarrierStateUserData>()
+                    .map(|commit_timer| commit_timer.lock().unwrap())
+                {
+                    commit_timer_state.signal_until(frame_target);
+                    let client = surface.client().unwrap();
+                    clients.insert(client.id(), client);
+                }
+            });
         }
 
-        let space_elements = smithay::desktop::space::space_render_elements::<_, WindowElement, _>(
-            renderer,
-            [space],
-            output,
-            1.0,
-        )
-        .expect("output without mode?");
-        output_render_elements.extend(space_elements.into_iter().map(OutputRenderElements::Space));
-
-        (output_render_elements, CLEAR_COLOR)
+        let dh = self.udev_data.display_handle.clone();
+        for client in clients.into_values() {
+            self.client_compositor_state(&client)
+                .blocker_cleared(self, &dh);
+        }
     }
-}
 
-#[allow(clippy::too_many_arguments)]
-pub fn render_output<'a, 'd, R>(
-    output: &'a Output,
-    space: &'a Space<WindowElement>,
-    custom_elements: impl IntoIterator<Item = CustomRenderElements<R>>,
-    renderer: &'a mut R,
-    framebuffer: &'a mut R::Framebuffer<'_>,
-    damage_tracker: &'d mut OutputDamageTracker,
-    age: usize,
-    show_window_preview: bool,
-) -> Result<RenderOutputResult<'d>, OutputDamageTrackerError<R::Error>>
-where
-    R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Clone + 'static,
-{
-    let (elements, clear_color) =
-        output_elements(output, space, custom_elements, renderer, show_window_preview);
-    damage_tracker.render_output(renderer, framebuffer, age, &elements, clear_color)
+    pub fn post_repaint(
+        &mut self,
+        output: &Output,
+        time: impl Into<Duration>,
+        dmabuf_feedback: Option<SurfaceDmabufFeedback>,
+        render_element_states: &RenderElementStates,
+    ) {
+        let time = time.into();
+        let throttle = Some(Duration::from_secs(1));
+
+        #[allow(clippy::mutable_key_type)]
+        let mut clients: HashMap<ClientId, Client> = HashMap::new();
+
+        self.space.elements().for_each(|window| {
+            window.with_surfaces(|surface, states| {
+                let primary_scanout_output = surface_primary_scanout_output(surface, states);
+
+                if let Some(output) = primary_scanout_output.as_ref() {
+                    with_fractional_scale(states, |fraction_scale| {
+                        fraction_scale
+                            .set_preferred_scale(output.current_scale().fractional_scale());
+                    });
+                }
+
+                if primary_scanout_output
+                    .as_ref()
+                    .map(|o| o == output)
+                    .unwrap_or(true)
+                {
+                    let fifo_barrier = states
+                        .cached_state
+                        .get::<FifoBarrierCachedState>()
+                        .current()
+                        .barrier
+                        .take();
+
+                    if let Some(fifo_barrier) = fifo_barrier {
+                        fifo_barrier.signal();
+                        let client = surface.client().unwrap();
+                        clients.insert(client.id(), client);
+                    }
+                }
+            });
+
+            if self.space.outputs_for_element(window).contains(output) {
+                window.send_frame(output, time, throttle, surface_primary_scanout_output);
+                if let Some(dmabuf_feedback) = dmabuf_feedback.as_ref() {
+                    window.send_dmabuf_feedback(
+                        output,
+                        surface_primary_scanout_output,
+                        |surface, _| {
+                            select_dmabuf_feedback(
+                                surface,
+                                render_element_states,
+                                &dmabuf_feedback.render_feedback,
+                                &dmabuf_feedback.scanout_feedback,
+                            )
+                        },
+                    );
+                }
+            }
+        });
+        let map = smithay::desktop::layer_map_for_output(output);
+        for layer_surface in map.layers() {
+            layer_surface.with_surfaces(|surface, states| {
+                let primary_scanout_output = surface_primary_scanout_output(surface, states);
+
+                if let Some(output) = primary_scanout_output.as_ref() {
+                    with_fractional_scale(states, |fraction_scale| {
+                        fraction_scale
+                            .set_preferred_scale(output.current_scale().fractional_scale());
+                    });
+                }
+
+                if primary_scanout_output
+                    .as_ref()
+                    .map(|o| o == output)
+                    .unwrap_or(true)
+                {
+                    let fifo_barrier = states
+                        .cached_state
+                        .get::<FifoBarrierCachedState>()
+                        .current()
+                        .barrier
+                        .take();
+
+                    if let Some(fifo_barrier) = fifo_barrier {
+                        fifo_barrier.signal();
+                        let client = surface.client().unwrap();
+                        clients.insert(client.id(), client);
+                    }
+                }
+            });
+
+            layer_surface.send_frame(output, time, throttle, surface_primary_scanout_output);
+            if let Some(dmabuf_feedback) = dmabuf_feedback.as_ref() {
+                layer_surface.send_dmabuf_feedback(
+                    output,
+                    surface_primary_scanout_output,
+                    |surface, _| {
+                        select_dmabuf_feedback(
+                            surface,
+                            render_element_states,
+                            &dmabuf_feedback.render_feedback,
+                            &dmabuf_feedback.scanout_feedback,
+                        )
+                    },
+                );
+            }
+        }
+        // Drop the lock to the layer map before calling blocker_cleared, which might end up
+        // calling the commit handler which in turn again could access the layer map.
+        std::mem::drop(map);
+
+        if let CursorImageStatus::Surface(ref surface) = self.cursor_status {
+            with_surfaces_surface_tree(surface, |surface, states| {
+                let primary_scanout_output = surface_primary_scanout_output(surface, states);
+
+                if let Some(output) = primary_scanout_output.as_ref() {
+                    with_fractional_scale(states, |fraction_scale| {
+                        fraction_scale
+                            .set_preferred_scale(output.current_scale().fractional_scale());
+                    });
+                }
+
+                if primary_scanout_output
+                    .as_ref()
+                    .map(|o| o == output)
+                    .unwrap_or(true)
+                {
+                    let fifo_barrier = states
+                        .cached_state
+                        .get::<FifoBarrierCachedState>()
+                        .current()
+                        .barrier
+                        .take();
+
+                    if let Some(fifo_barrier) = fifo_barrier {
+                        fifo_barrier.signal();
+                        let client = surface.client().unwrap();
+                        clients.insert(client.id(), client);
+                    }
+                }
+            });
+        }
+
+        let dh = self.udev_data.display_handle.clone();
+        for client in clients.into_values() {
+            self.client_compositor_state(&client)
+                .blocker_cleared(self, &dh);
+        }
+    }
 }

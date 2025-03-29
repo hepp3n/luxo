@@ -1,44 +1,32 @@
 use std::cell::RefCell;
 
 use smithay::{
-    desktop::{
-        find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output, space::SpaceElement,
-        PopupKeyboardGrab, PopupKind, PopupPointerGrab, PopupUngrabStrategy, Space, Window,
-        WindowSurfaceType,
-    },
-    input::{pointer::Focus, Seat},
-    output::Output,
-    reexports::{
+    delegate_xdg_shell, desktop::{
+        find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output,
+        space::SpaceElement, PopupKeyboardGrab, PopupKind, PopupPointerGrab, PopupUngrabStrategy,
+        Space, Window, WindowSurfaceType,
+    }, input::{pointer::Focus, Seat}, output::Output, reexports::{
         wayland_protocols::xdg::{decoration as xdg_decoration, shell::server::xdg_toplevel},
         wayland_server::{
             protocol::{wl_output, wl_seat, wl_surface::WlSurface},
             Resource,
         },
-    },
-    utils::{Logical, Point, Serial},
-    wayland::{
+    }, utils::{Logical, Point, Serial}, wayland::{
         compositor::{self, with_states},
         seat::WaylandFocus,
         shell::xdg::{
-            Configure, PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
-            XdgToplevelSurfaceData,
+            Configure, PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler,
+            XdgShellState, XdgToplevelSurfaceData,
         },
-    },
+    }
 };
 use tracing::{trace, warn};
 
-use crate::{
-    focus::KeyboardFocusTarget,
-    shell::{TouchMoveSurfaceGrab, TouchResizeSurfaceGrab},
-    state::{LuxoState, Backend},
-};
+use crate::{focus::KeyboardFocusTarget, shell::{grabs::{ResizeData, ResizeState, TouchResizeSurfaceGrab}, FullscreenSurface, SurfaceData}, state::Luxo};
 
-use super::{
-    fullscreen_output_geometry, place_new_window, FullscreenSurface, PointerMoveSurfaceGrab,
-    PointerResizeSurfaceGrab, ResizeData, ResizeEdge, ResizeState, SurfaceData, WindowElement,
-};
+use super::{element::{place_new_window, WindowElement}, fullscreen_output_geometry, grabs::{PointerMoveSurfaceGrab, PointerResizeSurfaceGrab, ResizeEdge, TouchMoveSurfaceGrab}};
 
-impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
+impl XdgShellHandler for Luxo {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
@@ -48,7 +36,12 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
         // of a xdg_surface has to be sent during the commit if
         // the surface is not already configured
         let window = WindowElement(Window::new_wayland_window(surface.clone()));
-        place_new_window(&mut self.space, self.pointer.current_location(), &window, true);
+        place_new_window(
+            &mut self.space,
+            self.pointer.current_location(),
+            &window,
+            true,
+        );
 
         compositor::add_post_commit_hook(surface.wl_surface(), |state: &mut Self, _, surface| {
             handle_toplevel_commit(&mut state.space, surface);
@@ -67,7 +60,12 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
         }
     }
 
-    fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+    fn reposition_request(
+        &mut self,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
+    ) {
         surface.with_pending_state(|state| {
             let geometry = positioner.get_geometry();
             state.geometry = geometry;
@@ -78,7 +76,7 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
-        let seat: Seat<LuxoState<BackendData>> = Seat::from_resource(&seat).unwrap();
+        let seat: Seat<Luxo> = Seat::from_resource(&seat).unwrap();
         self.move_request_xdg(&surface, &seat, serial)
     }
 
@@ -89,7 +87,7 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
         serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
-        let seat: Seat<LuxoState<BackendData>> = Seat::from_resource(&seat).unwrap();
+        let seat: Seat<Luxo> = Seat::from_resource(&seat).unwrap();
 
         if let Some(touch) = seat.get_touch() {
             if touch.has_grab(serial) {
@@ -263,7 +261,11 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
         }
     }
 
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, mut wl_output: Option<wl_output::WlOutput>) {
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        mut wl_output: Option<wl_output::WlOutput>,
+    ) {
         if surface
             .current_state()
             .capabilities
@@ -274,14 +276,15 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
             // independently from its buffer size
             let wl_surface = surface.wl_surface();
 
-            let output_geometry = fullscreen_output_geometry(wl_surface, wl_output.as_ref(), &mut self.space);
+            let output_geometry =
+                fullscreen_output_geometry(wl_surface, wl_output.as_ref(), &mut self.space);
 
             if let Some(geometry) = output_geometry {
                 let output = wl_output
                     .as_ref()
                     .and_then(Output::from_resource)
                     .unwrap_or_else(|| self.space.outputs().next().unwrap().clone());
-                let client = match self.display_handle.get_client(wl_surface.id()) {
+                let client = match self.udev_data.display_handle.get_client(wl_surface.id()) {
                     Ok(client) => client,
                     Err(_) => return,
                 };
@@ -291,7 +294,12 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
                 let window = self
                     .space
                     .elements()
-                    .find(|window| window.wl_surface().map(|s| &*s == wl_surface).unwrap_or(false))
+                    .find(|window| {
+                        window
+                            .wl_surface()
+                            .map(|s| &*s == wl_surface)
+                            .unwrap_or(false)
+                    })
                     .unwrap();
 
                 surface.with_pending_state(|state| {
@@ -299,7 +307,9 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
                     state.size = Some(geometry.size);
                     state.fullscreen_output = wl_output;
                 });
-                output.user_data().insert_if_missing(FullscreenSurface::default);
+                output
+                    .user_data()
+                    .insert_if_missing(FullscreenSurface::default);
                 output
                     .user_data()
                     .get::<FullscreenSurface>()
@@ -337,7 +347,7 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
             if let Some(fullscreen) = output.user_data().get::<FullscreenSurface>() {
                 trace!("Unfullscreening: {:?}", fullscreen.get());
                 fullscreen.clear();
-                self.backend_data.reset_buffers(&output);
+                self.udev_data.reset_buffers(&output);
             }
         }
 
@@ -395,7 +405,7 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
     }
 
     fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, serial: Serial) {
-        let seat: Seat<LuxoState<BackendData>> = Seat::from_resource(&seat).unwrap();
+        let seat: Seat<Luxo> = Seat::from_resource(&seat).unwrap();
         let kind = PopupKind::Xdg(surface);
         if let Some(root) = find_popup_root_surface(&kind).ok().and_then(|root| {
             self.space
@@ -408,7 +418,8 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
                         .outputs()
                         .find_map(|o| {
                             let map = layer_map_for_output(o);
-                            map.layer_for_surface(&root, WindowSurfaceType::TOPLEVEL).cloned()
+                            map.layer_for_surface(&root, WindowSurfaceType::TOPLEVEL)
+                                .cloned()
                         })
                         .map(KeyboardFocusTarget::LayerSurface)
                 })
@@ -430,7 +441,8 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
                 if let Some(pointer) = seat.get_pointer() {
                     if pointer.is_grabbed()
                         && !(pointer.has_grab(serial)
-                            || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
+                            || pointer
+                                .has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
                     {
                         grab.ungrab(PopupUngrabStrategy::All);
                         return;
@@ -442,8 +454,13 @@ impl<BackendData: Backend> XdgShellHandler for LuxoState<BackendData> {
     }
 }
 
-impl<BackendData: Backend> LuxoState<BackendData> {
-    pub fn move_request_xdg(&mut self, surface: &ToplevelSurface, seat: &Seat<Self>, serial: Serial) {
+impl Luxo {
+    pub fn move_request_xdg(
+        &mut self,
+        surface: &ToplevelSurface,
+        seat: &Seat<Self>,
+        serial: Serial,
+    ) {
         if let Some(touch) = seat.get_touch() {
             if touch.has_grab(serial) {
                 let start_data = touch.grab_start_data().unwrap();
@@ -470,7 +487,10 @@ impl<BackendData: Backend> LuxoState<BackendData> {
 
                 // If surface is maximized then unmaximize it
                 let current_state = surface.current_state();
-                if current_state.states.contains(xdg_toplevel::State::Maximized) {
+                if current_state
+                    .states
+                    .contains(xdg_toplevel::State::Maximized)
+                {
                     surface.with_pending_state(|state| {
                         state.states.unset(xdg_toplevel::State::Maximized);
                         state.size = None;
@@ -534,7 +554,10 @@ impl<BackendData: Backend> LuxoState<BackendData> {
 
         // If surface is maximized then unmaximize it
         let current_state = surface.current_state();
-        if current_state.states.contains(xdg_toplevel::State::Maximized) {
+        if current_state
+            .states
+            .contains(xdg_toplevel::State::Maximized)
+        {
             surface.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Maximized);
                 state.size = None;
@@ -612,31 +635,32 @@ fn handle_toplevel_commit(space: &mut Space<WindowElement>, surface: &WlSurface)
     let mut window_loc = space.element_location(&window)?;
     let geometry = window.geometry();
 
-    let new_loc: Point<Option<i32>, Logical> = with_states(window.wl_surface().as_deref()?, |states| {
-        let data = states.data_map.get::<RefCell<SurfaceData>>()?.borrow_mut();
+    let new_loc: Point<Option<i32>, Logical> =
+        with_states(window.wl_surface().as_deref()?, |states| {
+            let data = states.data_map.get::<RefCell<SurfaceData>>()?.borrow_mut();
 
-        if let ResizeState::Resizing(resize_data) = data.resize_state {
-            let edges = resize_data.edges;
-            let loc = resize_data.initial_window_location;
-            let size = resize_data.initial_window_size;
+            if let ResizeState::Resizing(resize_data) = data.resize_state {
+                let edges = resize_data.edges;
+                let loc = resize_data.initial_window_location;
+                let size = resize_data.initial_window_size;
 
-            // If the window is being resized by top or left, its location must be adjusted
-            // accordingly.
-            edges.intersects(ResizeEdge::TOP_LEFT).then(|| {
-                let new_x = edges
-                    .intersects(ResizeEdge::LEFT)
-                    .then_some(loc.x + (size.w - geometry.size.w));
+                // If the window is being resized by top or left, its location must be adjusted
+                // accordingly.
+                edges.intersects(ResizeEdge::TOP_LEFT).then(|| {
+                    let new_x = edges
+                        .intersects(ResizeEdge::LEFT)
+                        .then_some(loc.x + (size.w - geometry.size.w));
 
-                let new_y = edges
-                    .intersects(ResizeEdge::TOP)
-                    .then_some(loc.y + (size.h - geometry.size.h));
+                    let new_y = edges
+                        .intersects(ResizeEdge::TOP)
+                        .then_some(loc.y + (size.h - geometry.size.h));
 
-                (new_x, new_y).into()
-            })
-        } else {
-            None
-        }
-    })?;
+                    (new_x, new_y).into()
+                })
+            } else {
+                None
+            }
+        })?;
 
     if let Some(new_x) = new_loc.x {
         window_loc.x = new_x;
@@ -652,3 +676,5 @@ fn handle_toplevel_commit(space: &mut Space<WindowElement>, surface: &WlSurface)
 
     Some(())
 }
+
+delegate_xdg_shell!(Luxo);

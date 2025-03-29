@@ -2,17 +2,21 @@ use std::{borrow::Cow, time::Duration};
 
 use smithay::{
     backend::renderer::{
-        element::{solid::SolidColorRenderElement, surface::WaylandSurfaceRenderElement, AsRenderElements},
+        element::{
+            solid::SolidColorRenderElement, surface::WaylandSurfaceRenderElement, AsRenderElements,
+        },
         ImportAll, ImportMem, Renderer, Texture,
     },
     desktop::{
-        space::SpaceElement, utils::OutputPresentationFeedback, Window, WindowSurface, WindowSurfaceType,
+        layer_map_for_output, space::SpaceElement, utils::OutputPresentationFeedback, Space,
+        Window, WindowSurface, WindowSurfaceType,
     },
     input::{
         pointer::{
-            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
-            GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
-            GestureSwipeUpdateEvent, MotionEvent, PointerTarget, RelativeMotionEvent,
+            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
+            GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
+            GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, MotionEvent,
+            PointerTarget, RelativeMotionEvent,
         },
         touch::TouchTarget,
         Seat,
@@ -24,11 +28,13 @@ use smithay::{
     },
     render_elements,
     utils::{user_data::UserDataMap, IsAlive, Logical, Physical, Point, Rectangle, Scale, Serial},
-    wayland::{compositor::SurfaceData as WlSurfaceData, dmabuf::DmabufFeedback, seat::WaylandFocus},
+    wayland::{
+        compositor::SurfaceData as WlSurfaceData, dmabuf::DmabufFeedback, seat::WaylandFocus,
+    },
 };
 
 use super::ssd::HEADER_BAR_HEIGHT;
-use crate::{focus::PointerFocusTarget, state::Backend, LuxoState};
+use crate::{focus::PointerFocusTarget, state::Luxo};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowElement(pub Window);
@@ -49,12 +55,13 @@ impl WindowElement {
             Point::default()
         };
 
-        let surface_under = self.0.surface_under(location - offset.to_f64(), window_type);
+        let surface_under = self
+            .0
+            .surface_under(location - offset.to_f64(), window_type);
         let (under, loc) = match self.0.underlying_surface() {
             WindowSurface::Wayland(_) => {
                 surface_under.map(|(surface, loc)| (PointerFocusTarget::WlSurface(surface), loc))
             }
-            #[cfg(feature = "xwayland")]
             WindowSurface::X11(s) => {
                 surface_under.map(|(_, loc)| (PointerFocusTarget::X11Surface(s.clone()), loc))
             }
@@ -79,7 +86,8 @@ impl WindowElement {
         T: Into<Duration>,
         F: FnMut(&WlSurface, &WlSurfaceData) -> Option<Output> + Copy,
     {
-        self.0.send_frame(output, time, throttle, primary_scan_out_output)
+        self.0
+            .send_frame(output, time, throttle, primary_scan_out_output)
     }
 
     pub fn send_dmabuf_feedback<'a, P, F>(
@@ -111,7 +119,6 @@ impl WindowElement {
         )
     }
 
-    #[cfg(feature = "xwayland")]
     #[inline]
     pub fn is_x11(&self) -> bool {
         self.0.is_x11()
@@ -157,144 +164,116 @@ impl WaylandFocus for SSD {
     }
 }
 
-impl<BackendData: Backend> PointerTarget<LuxoState<BackendData>> for SSD {
-    fn enter(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        event: &MotionEvent,
-    ) {
+impl PointerTarget<Luxo> for SSD {
+    fn enter(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, event: &MotionEvent) {
         let mut state = self.0.decoration_state();
         if state.is_ssd {
             state.header_bar.pointer_enter(event.location);
         }
     }
-    fn motion(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        event: &MotionEvent,
-    ) {
+    fn motion(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, event: &MotionEvent) {
         let mut state = self.0.decoration_state();
         if state.is_ssd {
             state.header_bar.pointer_enter(event.location);
         }
     }
-    fn relative_motion(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        _event: &RelativeMotionEvent,
-    ) {
-    }
-    fn button(
-        &self,
-        seat: &Seat<LuxoState<BackendData>>,
-        data: &mut LuxoState<BackendData>,
-        event: &ButtonEvent,
-    ) {
+    fn relative_motion(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, _event: &RelativeMotionEvent) {}
+    fn button(&self, seat: &Seat<Luxo>, data: &mut Luxo, event: &ButtonEvent) {
         let mut state = self.0.decoration_state();
         if state.is_ssd {
             state.header_bar.clicked(seat, data, &self.0, event.serial);
         }
     }
-    fn axis(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        _frame: AxisFrame,
-    ) {
-    }
-    fn frame(&self, _seat: &Seat<LuxoState<BackendData>>, _data: &mut LuxoState<BackendData>) {}
-    fn leave(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        _serial: Serial,
-        _time: u32,
-    ) {
+    fn axis(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, _frame: AxisFrame) {}
+    fn frame(&self, _seat: &Seat<Luxo>, _data: &mut Luxo) {}
+    fn leave(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, _serial: Serial, _time: u32) {
         let mut state = self.0.decoration_state();
         if state.is_ssd {
             state.header_bar.pointer_leave();
         }
     }
+
     fn gesture_swipe_begin(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GestureSwipeBeginEvent,
     ) {
     }
+
     fn gesture_swipe_update(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GestureSwipeUpdateEvent,
     ) {
     }
+
     fn gesture_swipe_end(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GestureSwipeEndEvent,
     ) {
     }
+
     fn gesture_pinch_begin(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GesturePinchBeginEvent,
     ) {
     }
+
     fn gesture_pinch_update(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GesturePinchUpdateEvent,
     ) {
     }
+
     fn gesture_pinch_end(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GesturePinchEndEvent,
     ) {
     }
+
     fn gesture_hold_begin(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &GestureHoldBeginEvent,
     ) {
     }
-    fn gesture_hold_end(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        _event: &GestureHoldEndEvent,
-    ) {
+
+    fn gesture_hold_end(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, _event: &GestureHoldEndEvent) {
     }
 }
 
-impl<BackendData: Backend> TouchTarget<LuxoState<BackendData>> for SSD {
+impl TouchTarget<Luxo> for SSD {
     fn down(
         &self,
-        seat: &Seat<LuxoState<BackendData>>,
-        data: &mut LuxoState<BackendData>,
+        seat: &Seat<Luxo>,
+        data: &mut Luxo,
         event: &smithay::input::touch::DownEvent,
         _seq: Serial,
     ) {
         let mut state = self.0.decoration_state();
         if state.is_ssd {
             state.header_bar.pointer_enter(event.location);
-            state.header_bar.touch_down(seat, data, &self.0, event.serial);
+            state
+                .header_bar
+                .touch_down(seat, data, &self.0, event.serial);
         }
     }
 
     fn up(
         &self,
-        seat: &Seat<LuxoState<BackendData>>,
-        data: &mut LuxoState<BackendData>,
+        seat: &Seat<Luxo>,
+        data: &mut Luxo,
         event: &smithay::input::touch::UpEvent,
         _seq: Serial,
     ) {
@@ -306,8 +285,8 @@ impl<BackendData: Backend> TouchTarget<LuxoState<BackendData>> for SSD {
 
     fn motion(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         event: &smithay::input::touch::MotionEvent,
         _seq: Serial,
     ) {
@@ -317,26 +296,14 @@ impl<BackendData: Backend> TouchTarget<LuxoState<BackendData>> for SSD {
         }
     }
 
-    fn frame(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        _seq: Serial,
-    ) {
-    }
+    fn frame(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, _seq: Serial) {}
 
-    fn cancel(
-        &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
-        _seq: Serial,
-    ) {
-    }
+    fn cancel(&self, _seat: &Seat<Luxo>, _data: &mut Luxo, _seq: Serial) {}
 
     fn shape(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &smithay::input::touch::ShapeEvent,
         _seq: Serial,
     ) {
@@ -344,8 +311,8 @@ impl<BackendData: Backend> TouchTarget<LuxoState<BackendData>> for SSD {
 
     fn orientation(
         &self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        _data: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        _data: &mut Luxo,
         _event: &smithay::input::touch::OrientationEvent,
         _seq: Serial,
     ) {
@@ -391,7 +358,6 @@ impl SpaceElement for WindowElement {
     fn output_leave(&self, output: &Output) {
         SpaceElement::output_leave(&self.0, output);
     }
-    #[profiling::function]
     fn refresh(&self) {
         SpaceElement::refresh(&self.0);
     }
@@ -456,4 +422,37 @@ where
                 .collect()
         }
     }
+}
+
+pub fn place_new_window(
+    space: &mut Space<WindowElement>,
+    pointer_location: Point<f64, Logical>,
+    window: &WindowElement,
+    activate: bool,
+) {
+    let output = space
+        .output_under(pointer_location)
+        .next()
+        .or_else(|| space.outputs().next())
+        .cloned();
+    let output_geometry = output
+        .and_then(|o| {
+            let geo = space.output_geometry(&o)?;
+            let map = layer_map_for_output(&o);
+            let zone = map.non_exclusive_zone();
+            Some(Rectangle::new(geo.loc + zone.loc, zone.size))
+        })
+        .unwrap_or_else(|| Rectangle::from_size((800, 800).into()));
+
+    // set the initial toplevel bounds
+    if let Some(toplevel) = window.0.toplevel() {
+        toplevel.with_pending_state(|state| {
+            state.bounds = Some(output_geometry.size);
+        });
+    }
+
+    let x = 150;
+    let y = 150;
+
+    space.map_element(window.clone(), (x, y), activate);
 }

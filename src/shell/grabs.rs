@@ -1,40 +1,38 @@
 use std::cell::RefCell;
 
+use crate::{focus::PointerFocusTarget, state::Luxo};
+use smithay::xwayland::xwm::ResizeEdge as X11ResizeEdge;
 use smithay::{
     desktop::{space::SpaceElement, WindowSurface},
     input::{
         pointer::{
-            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
-            GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
-            GestureSwipeUpdateEvent, GrabStartData as PointerGrabStartData, MotionEvent, PointerGrab,
-            PointerInnerHandle, RelativeMotionEvent,
+            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
+            GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
+            GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
+            GrabStartData as PointerGrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
+            RelativeMotionEvent,
         },
         touch::{GrabStartData as TouchGrabStartData, TouchGrab},
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
-    utils::{IsAlive, Logical, Point, Serial, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, Serial, Size},
     wayland::{compositor::with_states, shell::xdg::SurfaceCachedState},
 };
-#[cfg(feature = "xwayland")]
-use smithay::{utils::Rectangle, xwayland::xwm::ResizeEdge as X11ResizeEdge};
 
-use super::{SurfaceData, WindowElement};
-use crate::{
-    focus::PointerFocusTarget,
-    state::{LuxoState, Backend},
-};
+use super::element::WindowElement;
+use super::SurfaceData;
 
-pub struct PointerMoveSurfaceGrab<BackendData: Backend + 'static> {
-    pub start_data: PointerGrabStartData<LuxoState<BackendData>>,
+pub struct PointerMoveSurfaceGrab {
+    pub start_data: PointerGrabStartData<Luxo>,
     pub window: WindowElement,
     pub initial_window_location: Point<i32, Logical>,
 }
 
-impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSurfaceGrab<BackendData> {
+impl PointerGrab<Luxo> for PointerMoveSurfaceGrab {
     fn motion(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         _focus: Option<(PointerFocusTarget, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
@@ -50,8 +48,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn relative_motion(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         focus: Option<(PointerFocusTarget, Point<f64, Logical>)>,
         event: &RelativeMotionEvent,
     ) {
@@ -60,8 +58,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn button(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &ButtonEvent,
     ) {
         handle.button(data, event);
@@ -73,25 +71,21 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn axis(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         details: AxisFrame,
     ) {
         handle.axis(data, details)
     }
 
-    fn frame(
-        &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
-    ) {
+    fn frame(&mut self, data: &mut Luxo, handle: &mut PointerInnerHandle<'_, Luxo>) {
         handle.frame(data);
     }
 
     fn gesture_swipe_begin(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureSwipeBeginEvent,
     ) {
         handle.gesture_swipe_begin(data, event);
@@ -99,8 +93,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_swipe_update(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureSwipeUpdateEvent,
     ) {
         handle.gesture_swipe_update(data, event);
@@ -108,8 +102,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_swipe_end(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureSwipeEndEvent,
     ) {
         handle.gesture_swipe_end(data, event);
@@ -117,8 +111,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_pinch_begin(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GesturePinchBeginEvent,
     ) {
         handle.gesture_pinch_begin(data, event);
@@ -126,8 +120,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_pinch_update(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GesturePinchUpdateEvent,
     ) {
         handle.gesture_pinch_update(data, event);
@@ -135,8 +129,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_pinch_end(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GesturePinchEndEvent,
     ) {
         handle.gesture_pinch_end(data, event);
@@ -144,8 +138,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_hold_begin(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureHoldBeginEvent,
     ) {
         handle.gesture_hold_begin(data, event);
@@ -153,33 +147,33 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerMoveSu
 
     fn gesture_hold_end(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureHoldEndEvent,
     ) {
         handle.gesture_hold_end(data, event);
     }
 
-    fn start_data(&self) -> &PointerGrabStartData<LuxoState<BackendData>> {
+    fn start_data(&self) -> &PointerGrabStartData<Luxo> {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut LuxoState<BackendData>) {}
+    fn unset(&mut self, _data: &mut Luxo) {}
 }
 
-pub struct TouchMoveSurfaceGrab<BackendData: Backend + 'static> {
-    pub start_data: TouchGrabStartData<LuxoState<BackendData>>,
+pub struct TouchMoveSurfaceGrab {
+    pub start_data: TouchGrabStartData<Luxo>,
     pub window: WindowElement,
     pub initial_window_location: Point<i32, Logical>,
 }
 
-impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchMoveSurfaceGrab<BackendData> {
+impl TouchGrab<Luxo> for TouchMoveSurfaceGrab {
     fn down(
         &mut self,
-        _data: &mut LuxoState<BackendData>,
-        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        _data: &mut Luxo,
+        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         _focus: Option<(
-            <LuxoState<BackendData> as smithay::input::SeatHandler>::TouchFocus,
+            <Luxo as smithay::input::SeatHandler>::TouchFocus,
             Point<f64, Logical>,
         )>,
         _event: &smithay::input::touch::DownEvent,
@@ -189,8 +183,8 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchMoveSurfac
 
     fn up(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         event: &smithay::input::touch::UpEvent,
         seq: Serial,
     ) {
@@ -204,10 +198,10 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchMoveSurfac
 
     fn motion(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         _focus: Option<(
-            <LuxoState<BackendData> as smithay::input::SeatHandler>::TouchFocus,
+            <Luxo as smithay::input::SeatHandler>::TouchFocus,
             Point<f64, Logical>,
         )>,
         event: &smithay::input::touch::MotionEvent,
@@ -225,16 +219,16 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchMoveSurfac
 
     fn frame(
         &mut self,
-        _data: &mut LuxoState<BackendData>,
-        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        _data: &mut Luxo,
+        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         _seq: Serial,
     ) {
     }
 
     fn cancel(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         seq: Serial,
     ) {
         handle.cancel(data, seq);
@@ -243,8 +237,8 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchMoveSurfac
 
     fn shape(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         event: &smithay::input::touch::ShapeEvent,
         seq: Serial,
     ) {
@@ -253,19 +247,19 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchMoveSurfac
 
     fn orientation(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         event: &smithay::input::touch::OrientationEvent,
         seq: Serial,
     ) {
         handle.orientation(data, event, seq);
     }
 
-    fn start_data(&self) -> &smithay::input::touch::GrabStartData<LuxoState<BackendData>> {
+    fn start_data(&self) -> &smithay::input::touch::GrabStartData<Luxo> {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut LuxoState<BackendData>) {}
+    fn unset(&mut self, _data: &mut Luxo) {}
 }
 
 bitflags::bitflags! {
@@ -297,7 +291,6 @@ impl From<ResizeEdge> for xdg_toplevel::ResizeEdge {
     }
 }
 
-#[cfg(feature = "xwayland")]
 impl From<X11ResizeEdge> for ResizeEdge {
     #[inline]
     fn from(edge: X11ResizeEdge) -> Self {
@@ -339,8 +332,8 @@ pub enum ResizeState {
     WaitingForCommit(ResizeData),
 }
 
-pub struct PointerResizeSurfaceGrab<BackendData: Backend + 'static> {
-    pub start_data: PointerGrabStartData<LuxoState<BackendData>>,
+pub struct PointerResizeSurfaceGrab {
+    pub start_data: PointerGrabStartData<Luxo>,
     pub window: WindowElement,
     pub edges: ResizeEdge,
     pub initial_window_location: Point<i32, Logical>,
@@ -348,11 +341,11 @@ pub struct PointerResizeSurfaceGrab<BackendData: Backend + 'static> {
     pub last_window_size: Size<i32, Logical>,
 }
 
-impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResizeSurfaceGrab<BackendData> {
+impl PointerGrab<Luxo> for PointerResizeSurfaceGrab {
     fn motion(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         _focus: Option<(PointerFocusTarget, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
@@ -401,8 +394,16 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
         let min_width = min_size.w.max(1);
         let min_height = min_size.h.max(1);
-        let max_width = if max_size.w == 0 { i32::MAX } else { max_size.w };
-        let max_height = if max_size.h == 0 { i32::MAX } else { max_size.h };
+        let max_width = if max_size.w == 0 {
+            i32::MAX
+        } else {
+            max_size.w
+        };
+        let max_height = if max_size.h == 0 {
+            i32::MAX
+        } else {
+            max_size.h
+        };
 
         new_window_width = new_window_width.max(min_width).min(max_width);
         new_window_height = new_window_height.max(min_height).min(max_height);
@@ -417,7 +418,6 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
                 });
                 xdg.send_pending_configure();
             }
-            #[cfg(feature = "xwayland")]
             WindowSurface::X11(x11) => {
                 let location = data.space.element_location(&self.window).unwrap();
                 x11.configure(Rectangle::new(location, self.last_window_size))
@@ -428,8 +428,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn relative_motion(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         focus: Option<(PointerFocusTarget, Point<f64, Logical>)>,
         event: &RelativeMotionEvent,
     ) {
@@ -438,8 +438,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn button(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &ButtonEvent,
     ) {
         handle.button(data, event);
@@ -482,13 +482,13 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
                             .unwrap()
                             .borrow_mut();
                         if let ResizeState::Resizing(resize_data) = data.resize_state {
-                            data.resize_state = ResizeState::WaitingForFinalAck(resize_data, event.serial);
+                            data.resize_state =
+                                ResizeState::WaitingForFinalAck(resize_data, event.serial);
                         } else {
                             panic!("invalid resize state: {:?}", data.resize_state);
                         }
                     });
                 }
-                #[cfg(feature = "xwayland")]
                 WindowSurface::X11(x11) => {
                     let mut location = data.space.element_location(&self.window).unwrap();
                     if self.edges.intersects(ResizeEdge::TOP_LEFT) {
@@ -531,25 +531,21 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn axis(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         details: AxisFrame,
     ) {
         handle.axis(data, details)
     }
 
-    fn frame(
-        &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
-    ) {
+    fn frame(&mut self, data: &mut Luxo, handle: &mut PointerInnerHandle<'_, Luxo>) {
         handle.frame(data);
     }
 
     fn gesture_swipe_begin(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureSwipeBeginEvent,
     ) {
         handle.gesture_swipe_begin(data, event);
@@ -557,8 +553,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_swipe_update(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureSwipeUpdateEvent,
     ) {
         handle.gesture_swipe_update(data, event);
@@ -566,8 +562,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_swipe_end(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureSwipeEndEvent,
     ) {
         handle.gesture_swipe_end(data, event);
@@ -575,8 +571,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_pinch_begin(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GesturePinchBeginEvent,
     ) {
         handle.gesture_pinch_begin(data, event);
@@ -584,8 +580,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_pinch_update(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GesturePinchUpdateEvent,
     ) {
         handle.gesture_pinch_update(data, event);
@@ -593,8 +589,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_pinch_end(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GesturePinchEndEvent,
     ) {
         handle.gesture_pinch_end(data, event);
@@ -602,8 +598,8 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_hold_begin(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureHoldBeginEvent,
     ) {
         handle.gesture_hold_begin(data, event);
@@ -611,22 +607,22 @@ impl<BackendData: Backend> PointerGrab<LuxoState<BackendData>> for PointerResize
 
     fn gesture_hold_end(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut PointerInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut PointerInnerHandle<'_, Luxo>,
         event: &GestureHoldEndEvent,
     ) {
         handle.gesture_hold_end(data, event);
     }
 
-    fn start_data(&self) -> &PointerGrabStartData<LuxoState<BackendData>> {
+    fn start_data(&self) -> &PointerGrabStartData<Luxo> {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut LuxoState<BackendData>) {}
+    fn unset(&mut self, _data: &mut Luxo) {}
 }
 
-pub struct TouchResizeSurfaceGrab<BackendData: Backend + 'static> {
-    pub start_data: TouchGrabStartData<LuxoState<BackendData>>,
+pub struct TouchResizeSurfaceGrab {
+    pub start_data: TouchGrabStartData<Luxo>,
     pub window: WindowElement,
     pub edges: ResizeEdge,
     pub initial_window_location: Point<i32, Logical>,
@@ -634,13 +630,13 @@ pub struct TouchResizeSurfaceGrab<BackendData: Backend + 'static> {
     pub last_window_size: Size<i32, Logical>,
 }
 
-impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurfaceGrab<BackendData> {
+impl TouchGrab<Luxo> for TouchResizeSurfaceGrab {
     fn down(
         &mut self,
-        _data: &mut LuxoState<BackendData>,
-        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        _data: &mut Luxo,
+        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         _focus: Option<(
-            <LuxoState<BackendData> as smithay::input::SeatHandler>::TouchFocus,
+            <Luxo as smithay::input::SeatHandler>::TouchFocus,
             Point<f64, Logical>,
         )>,
         _event: &smithay::input::touch::DownEvent,
@@ -650,8 +646,8 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
 
     fn up(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         event: &smithay::input::touch::UpEvent,
         _seq: Serial,
     ) {
@@ -677,12 +673,12 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
                     let mut location = data.space.element_location(&self.window).unwrap();
 
                     if self.edges.intersects(ResizeEdge::LEFT) {
-                        location.x =
-                            self.initial_window_location.x + (self.initial_window_size.w - geometry.size.w);
+                        location.x = self.initial_window_location.x
+                            + (self.initial_window_size.w - geometry.size.w);
                     }
                     if self.edges.intersects(ResizeEdge::TOP) {
-                        location.y =
-                            self.initial_window_location.y + (self.initial_window_size.h - geometry.size.h);
+                        location.y = self.initial_window_location.y
+                            + (self.initial_window_size.h - geometry.size.h);
                     }
 
                     data.space.map_element(self.window.clone(), location, true);
@@ -695,25 +691,25 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
                         .unwrap()
                         .borrow_mut();
                     if let ResizeState::Resizing(resize_data) = data.resize_state {
-                        data.resize_state = ResizeState::WaitingForFinalAck(resize_data, event.serial);
+                        data.resize_state =
+                            ResizeState::WaitingForFinalAck(resize_data, event.serial);
                     } else {
                         panic!("invalid resize state: {:?}", data.resize_state);
                     }
                 });
             }
-            #[cfg(feature = "xwayland")]
             WindowSurface::X11(x11) => {
                 let mut location = data.space.element_location(&self.window).unwrap();
                 if self.edges.intersects(ResizeEdge::TOP_LEFT) {
                     let geometry = self.window.geometry();
 
                     if self.edges.intersects(ResizeEdge::LEFT) {
-                        location.x =
-                            self.initial_window_location.x + (self.initial_window_size.w - geometry.size.w);
+                        location.x = self.initial_window_location.x
+                            + (self.initial_window_size.w - geometry.size.w);
                     }
                     if self.edges.intersects(ResizeEdge::TOP) {
-                        location.y =
-                            self.initial_window_location.y + (self.initial_window_size.h - geometry.size.h);
+                        location.y = self.initial_window_location.y
+                            + (self.initial_window_size.h - geometry.size.h);
                     }
 
                     data.space.map_element(self.window.clone(), location, true);
@@ -743,10 +739,10 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
 
     fn motion(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         _focus: Option<(
-            <LuxoState<BackendData> as smithay::input::SeatHandler>::TouchFocus,
+            <Luxo as smithay::input::SeatHandler>::TouchFocus,
             Point<f64, Logical>,
         )>,
         event: &smithay::input::touch::MotionEvent,
@@ -798,8 +794,16 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
 
         let min_width = min_size.w.max(1);
         let min_height = min_size.h.max(1);
-        let max_width = if max_size.w == 0 { i32::MAX } else { max_size.w };
-        let max_height = if max_size.h == 0 { i32::MAX } else { max_size.h };
+        let max_width = if max_size.w == 0 {
+            i32::MAX
+        } else {
+            max_size.w
+        };
+        let max_height = if max_size.h == 0 {
+            i32::MAX
+        } else {
+            max_size.h
+        };
 
         new_window_width = new_window_width.max(min_width).min(max_width);
         new_window_height = new_window_height.max(min_height).min(max_height);
@@ -814,7 +818,6 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
                 });
                 xdg.send_pending_configure();
             }
-            #[cfg(feature = "xwayland")]
             WindowSurface::X11(x11) => {
                 let location = data.space.element_location(&self.window).unwrap();
                 x11.configure(Rectangle::new(location, self.last_window_size))
@@ -825,16 +828,16 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
 
     fn frame(
         &mut self,
-        _data: &mut LuxoState<BackendData>,
-        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        _data: &mut Luxo,
+        _handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         _seq: Serial,
     ) {
     }
 
     fn cancel(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         seq: Serial,
     ) {
         handle.cancel(data, seq);
@@ -843,8 +846,8 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
 
     fn shape(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         event: &smithay::input::touch::ShapeEvent,
         seq: Serial,
     ) {
@@ -853,17 +856,17 @@ impl<BackendData: Backend> TouchGrab<LuxoState<BackendData>> for TouchResizeSurf
 
     fn orientation(
         &mut self,
-        data: &mut LuxoState<BackendData>,
-        handle: &mut smithay::input::touch::TouchInnerHandle<'_, LuxoState<BackendData>>,
+        data: &mut Luxo,
+        handle: &mut smithay::input::touch::TouchInnerHandle<'_, Luxo>,
         event: &smithay::input::touch::OrientationEvent,
         seq: Serial,
     ) {
         handle.orientation(data, event, seq);
     }
 
-    fn start_data(&self) -> &smithay::input::touch::GrabStartData<LuxoState<BackendData>> {
+    fn start_data(&self) -> &smithay::input::touch::GrabStartData<Luxo> {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut LuxoState<BackendData>) {}
+    fn unset(&mut self, _data: &mut Luxo) {}
 }

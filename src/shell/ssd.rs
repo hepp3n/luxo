@@ -8,13 +8,12 @@ use smithay::{
     },
     desktop::WindowSurface,
     input::Seat,
-    utils::{Logical, Point, Serial},
-    wayland::shell::xdg::XdgShellHandler,
+    utils::{Logical, Point, Serial}, wayland::shell::xdg::XdgShellHandler as _,
 };
 
 use std::cell::{RefCell, RefMut};
 
-use crate::{state::Backend, LuxoState};
+use crate::state::Luxo;
 
 use super::WindowElement;
 
@@ -53,10 +52,10 @@ impl HeaderBar {
         self.pointer_loc = None;
     }
 
-    pub fn clicked<BackendData: Backend>(
+    pub fn clicked(
         &mut self,
-        seat: &Seat<LuxoState<BackendData>>,
-        state: &mut LuxoState<BackendData>,
+        seat: &Seat<Luxo>,
+        state: &mut Luxo,
         window: &WindowElement,
         serial: Serial,
     ) {
@@ -64,7 +63,6 @@ impl HeaderBar {
             Some(loc) if loc.x >= (self.width - BUTTON_WIDTH) as f64 => {
                 match window.0.underlying_surface() {
                     WindowSurface::Wayland(w) => w.send_close(),
-                    #[cfg(feature = "xwayland")]
                     WindowSurface::X11(w) => {
                         let _ = w.close();
                     }
@@ -73,7 +71,6 @@ impl HeaderBar {
             Some(loc) if loc.x >= (self.width - (BUTTON_WIDTH * 2)) as f64 => {
                 match window.0.underlying_surface() {
                     WindowSurface::Wayland(w) => state.maximize_request(w.clone()),
-                    #[cfg(feature = "xwayland")]
                     WindowSurface::X11(w) => {
                         let surface = w.clone();
                         state
@@ -87,11 +84,10 @@ impl HeaderBar {
                     WindowSurface::Wayland(w) => {
                         let seat = seat.clone();
                         let toplevel = w.clone();
-                        state
-                            .handle
-                            .insert_idle(move |data| data.move_request_xdg(&toplevel, &seat, serial));
+                        state.handle.insert_idle(move |data| {
+                            data.move_request_xdg(&toplevel, &seat, serial)
+                        });
                     }
-                    #[cfg(feature = "xwayland")]
                     WindowSurface::X11(w) => {
                         let window = w.clone();
                         state
@@ -104,10 +100,10 @@ impl HeaderBar {
         };
     }
 
-    pub fn touch_down<BackendData: Backend>(
+    pub fn touch_down(
         &mut self,
-        seat: &Seat<LuxoState<BackendData>>,
-        state: &mut LuxoState<BackendData>,
+        seat: &Seat<Luxo>,
+        state: &mut Luxo,
         window: &WindowElement,
         serial: Serial,
     ) {
@@ -119,11 +115,10 @@ impl HeaderBar {
                     WindowSurface::Wayland(w) => {
                         let seat = seat.clone();
                         let toplevel = w.clone();
-                        state
-                            .handle
-                            .insert_idle(move |data| data.move_request_xdg(&toplevel, &seat, serial));
+                        state.handle.insert_idle(move |data| {
+                            data.move_request_xdg(&toplevel, &seat, serial)
+                        });
                     }
-                    #[cfg(feature = "xwayland")]
                     WindowSurface::X11(w) => {
                         let window = w.clone();
                         state
@@ -136,10 +131,10 @@ impl HeaderBar {
         };
     }
 
-    pub fn touch_up<BackendData: Backend>(
+    pub fn touch_up(
         &mut self,
-        _seat: &Seat<LuxoState<BackendData>>,
-        state: &mut LuxoState<BackendData>,
+        _seat: &Seat<Luxo>,
+        state: &mut Luxo,
         window: &WindowElement,
         _serial: Serial,
     ) {
@@ -147,7 +142,6 @@ impl HeaderBar {
             Some(loc) if loc.x >= (self.width - BUTTON_WIDTH) as f64 => {
                 match window.0.underlying_surface() {
                     WindowSurface::Wayland(w) => w.send_close(),
-                    #[cfg(feature = "xwayland")]
                     WindowSurface::X11(w) => {
                         let _ = w.close();
                     }
@@ -156,7 +150,6 @@ impl HeaderBar {
             Some(loc) if loc.x >= (self.width - (BUTTON_WIDTH * 2)) as f64 => {
                 match window.0.underlying_surface() {
                     WindowSurface::Wayland(w) => state.maximize_request(w.clone()),
-                    #[cfg(feature = "xwayland")]
                     WindowSurface::X11(w) => {
                         let surface = w.clone();
                         state
@@ -191,8 +184,10 @@ impl HeaderBar {
             .unwrap_or(false)
             && (needs_redraw_buttons || !self.close_button_hover)
         {
-            self.close_button
-                .update((BUTTON_WIDTH as i32, BUTTON_HEIGHT as i32), CLOSE_COLOR_HOVER);
+            self.close_button.update(
+                (BUTTON_WIDTH as i32, BUTTON_HEIGHT as i32),
+                CLOSE_COLOR_HOVER,
+            );
             self.close_button_hover = true;
         } else if !self
             .pointer_loc
@@ -209,7 +204,9 @@ impl HeaderBar {
         if self
             .pointer_loc
             .as_ref()
-            .map(|l| l.x >= (width - BUTTON_WIDTH * 2) as f64 && l.x <= (width - BUTTON_WIDTH) as f64)
+            .map(|l| {
+                l.x >= (width - BUTTON_WIDTH * 2) as f64 && l.x <= (width - BUTTON_WIDTH) as f64
+            })
             .unwrap_or(false)
             && (needs_redraw_buttons || !self.maximize_button_hover)
         {
@@ -219,7 +216,9 @@ impl HeaderBar {
         } else if !self
             .pointer_loc
             .as_ref()
-            .map(|l| l.x >= (width - BUTTON_WIDTH * 2) as f64 && l.x <= (width - BUTTON_WIDTH) as f64)
+            .map(|l| {
+                l.x >= (width - BUTTON_WIDTH * 2) as f64 && l.x <= (width - BUTTON_WIDTH) as f64
+            })
             .unwrap_or(false)
             && (needs_redraw_buttons || self.maximize_button_hover)
         {
@@ -254,14 +253,22 @@ impl<R: Renderer> AsRenderElements<R> for HeaderBar {
             .into(),
             SolidColorRenderElement::from_buffer(
                 &self.maximize_button,
-                location + (header_end_offset - button_offset.upscale(2)).to_physical_precise_round(scale),
+                location
+                    + (header_end_offset - button_offset.upscale(2))
+                        .to_physical_precise_round(scale),
                 scale,
                 alpha,
                 Kind::Unspecified,
             )
             .into(),
-            SolidColorRenderElement::from_buffer(&self.background, location, scale, alpha, Kind::Unspecified)
-                .into(),
+            SolidColorRenderElement::from_buffer(
+                &self.background,
+                location,
+                scale,
+                alpha,
+                Kind::Unspecified,
+            )
+            .into(),
         ]
     }
 }

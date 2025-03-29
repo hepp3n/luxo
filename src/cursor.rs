@@ -1,10 +1,6 @@
-use std::{io::Read, time::Duration};
+use std::{io::Read as _, time::Duration};
 
-use tracing::warn;
-use xcursor::{
-    parser::{parse_xcursor, Image},
-    CursorTheme,
-};
+use xcursor::{parser::{parse_xcursor, Image}, CursorTheme};
 
 static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 
@@ -25,7 +21,7 @@ impl Cursor {
 
         let theme = CursorTheme::load(&name);
         let icons = load_icon(&theme)
-            .map_err(|err| warn!("Unable to load xcursor: {}, using fallback cursor", err))
+            .map_err(|err| tracing::warn!("Unable to load xcursor: {}, using fallback cursor", err))
             .unwrap_or_else(|_| {
                 vec![Image {
                     size: 32,
@@ -55,9 +51,9 @@ fn nearest_images(size: u32, images: &[Image]) -> impl Iterator<Item = &Image> {
         .min_by_key(|image| (size as i32 - image.size as i32).abs())
         .unwrap();
 
-    images
-        .iter()
-        .filter(move |image| image.width == nearest_image.width && image.height == nearest_image.height)
+    images.iter().filter(move |image| {
+        image.width == nearest_image.width && image.height == nearest_image.height
+    })
 }
 
 fn frame(mut millis: u32, size: u32, images: &[Image]) -> Image {
